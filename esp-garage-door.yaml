@@ -1,0 +1,76 @@
+esphome:
+  name: esp-garage-door
+  friendly_name: Garage Door
+  comment: Genie garage door controller via transistor-triggered spare remote
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "GarageDoor-Fallback"
+    password: !secret fallback_ap_password
+
+captive_portal:
+
+# GPIO driving the 2N3904 base via 1 kΩ resistor.
+# When GPIO33 goes HIGH, transistor saturates and shorts the
+# remote's door-button input pad to ground → simulated button press.
+switch:
+  - platform: gpio
+    pin: GPIO33
+    id: door_trigger
+    restore_mode: ALWAYS_OFF
+    internal: true
+
+# Genie wall-button logic: one momentary press cycles the door
+# (open if closed, close if open, stop if moving). All three cover
+# actions pulse the same relay for ~300 ms.
+cover:
+  - platform: template
+    name: "Garage Door"
+    id: garage_door
+    device_class: garage
+    optimistic: true
+    open_action:
+      - switch.turn_on: door_trigger
+      - delay: 300ms
+      - switch.turn_off: door_trigger
+    close_action:
+      - switch.turn_on: door_trigger
+      - delay: 300ms
+      - switch.turn_off: door_trigger
+    stop_action:
+      - switch.turn_on: door_trigger
+      - delay: 300ms
+      - switch.turn_off: door_trigger
+
+sensor:
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    update_interval: 60s
+  - platform: uptime
+    name: "Uptime"
+    update_interval: 60s
+
+text_sensor:
+  - platform: version
+    name: "ESPHome Version"
+
+button:
+  - platform: restart
+    name: "Restart"
