@@ -2,9 +2,8 @@
 
 ESP32 controller for a Genie garage door opener. Triggers the opener via a
 transistor-wired spare Intellicode remote, sidestepping the Series III wall
-console's serial protocol entirely.
-
-Position feedback (HC-SR04 ultrasonic) is planned but not yet wired.
+console's serial protocol entirely. Position feedback comes from an HC-SR04
+ultrasonic sensor aimed at the top door panel.
 
 ## Hardware
 
@@ -14,6 +13,8 @@ Position feedback (HC-SR04 ultrasonic) is planned but not yet wired.
 | Genie Intellicode remote (CR2032-powered), spare | — |
 | 2N3904 NPN transistor (TO-92) | — |
 | 1 kΩ resistor | — |
+| HC-SR04 ultrasonic sensor (or HC-SR04P, 3 V variant — no divider needed) | — |
+| 2 kΩ + 1 kΩ resistors for ECHO voltage divider (skip if using HC-SR04P) | — |
 | Hookup wire | — |
 
 ## Wiring
@@ -30,6 +31,33 @@ ESP32 GND  ──────────────────►  2N3904 Emi
 
 The remote is permanently powered from the ESP32's 3.3 V rail — no battery
 needed once wired.
+
+### HC-SR04 ultrasonic sensor
+
+```
+ESP32 5V  ─────────────►  HC-SR04 VCC
+ESP32 GND ─────────────►  HC-SR04 GND
+ESP32 GPIO23 ─────────►  HC-SR04 TRIG
+HC-SR04 ECHO ──[ 2 kΩ ]──┬──►  ESP32 GPIO22
+                          │
+                        [ 1 kΩ ]
+                          │
+                         GND
+```
+
+**The ECHO pin outputs 5 V — do not wire it directly to GPIO22.** Use the
+2 kΩ / 1 kΩ divider shown above, or substitute an HC-SR04P (3 V variant) which
+needs no divider.
+
+### Mounting the HC-SR04
+
+Mount on top of the powerhead (or ceiling right next to it), pointing straight
+down at the top door panel. For a standard sectional door:
+
+- **Door OPEN:** top panel horizontal, close to ceiling → small distance
+- **Door CLOSED:** top panel vertical, at the front of the opening → large distance
+
+So `distance < threshold` ⇒ OPEN, `distance > threshold` ⇒ CLOSED.
 
 ### Identifying the button input pad
 
@@ -81,9 +109,21 @@ Once the ESP32 boots and joins WiFi:
 3. Paste the `api_encryption_key` from `secrets.yaml`.
 4. The **Garage Door** cover entity appears under the ESPHome integration.
 
-You can now open/close/stop the door from HA. The cover is currently
-`optimistic: true` (HA assumes the requested state) because there's no position
-sensor yet — that changes once the HC-SR04 is wired in.
+You can now open/close/stop the door from HA. The cover state is derived from
+the HC-SR04 distance reading versus the threshold (`Door Distance Threshold`
+number entity, default 1.0 m — adjustable from HA's UI).
+
+### Tuning the threshold
+
+1. With the door **closed**, note the `Garage Door Distance` sensor reading in
+   HA (e.g., 2.4 m).
+2. With the door **open**, note the same reading (e.g., 0.3 m).
+3. Pick a threshold halfway between (e.g., ~1.3 m) and set it on the
+   `Door Distance Threshold` number entity.
+4. Cycle the door a few times to confirm the cover state flips reliably at
+   the right moment. Add margin if it flickers mid-travel.
+
+The threshold persists across reboots (`restore_value: true`).
 
 ## CI
 
