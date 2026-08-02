@@ -18,23 +18,41 @@ Defaults to 'run' (compile + flash, prompts for USB or OTA).
 esphome YAML file (default: esp-garage-door.yaml).
 
 .PARAMETER Device
-Serial device for USB flashing (e.g. /dev/ttyUSB0, COM3). Auto-detected
-on Linux/macOS if present. Not needed for OTA updates.
+Upload target. Accepts:
+  - Serial port path (e.g. /dev/ttyUSB0, /dev/ttyACM0, COM3)
+    -> also passed to docker as --device for container access
+  - IP address (e.g. 192.168.1.74) for OTA
+    -> no docker device passthrough needed
+  - Hostname (e.g. esp-garage-door.local) — requires --network host
+    for mDNS to work inside the container, which this script does
+    not set; use the IP instead.
+
+If omitted on Linux/macOS, auto-detects /dev/ttyUSB0 and /dev/ttyACM0.
 
 .PARAMETER NoTty
 Skip the -it flags (use when piping output to a file).
 
 .EXAMPLE
 PS> ./scripts/Invoke-EsphomeDocker.ps1
-Compile and flash via 'esphome run esp-garage-door.yaml'.
+Compile and flash; esphome prompts for upload method.
 
 .EXAMPLE
 PS> ./scripts/Invoke-EsphomeDocker.ps1 -Command compile
 Just validate and compile; no flash.
 
 .EXAMPLE
-PS> ./scripts/Invoke-EsphomeDocker.ps1 -Command logs
-Stream live logs (uses OTA, no USB device needed).
+PS> ./scripts/Invoke-EsphomeDocker.ps1 -Device 192.168.1.74
+OTA flash straight to the device at the given IP — no USB needed, no
+interactive picker. Bypasses mDNS so it works with default docker
+bridge networking.
+
+.EXAMPLE
+PS> ./scripts/Invoke-EsphomeDocker.ps1 -Command logs -Device 192.168.1.74
+Stream live logs over OTA from the specified device.
+
+.EXAMPLE
+PS> ./scripts/Invoke-EsphomeDocker.ps1 -Device /dev/ttyACM0
+Force a specific USB serial port instead of auto-detection.
 
 .NOTES
 Requires docker installed. On Linux the user must be in the docker
@@ -76,10 +94,13 @@ if (-not $Device -and -not $IsWindows) {
     }
 }
 
+# Serial ports need docker --device for container access; IPs/hostnames don't
+$isSerial = $Device -and ($Device -match '^/' -or $Device -match '^COM\d+')
+
 # Build docker args
 $dockerArgs = @('run', '--rm')
 
-if ($Device) {
+if ($isSerial) {
     $dockerArgs += @('--device', $Device)
 }
 
@@ -94,6 +115,11 @@ $dockerArgs += @(
     $Command,
     $ConfigFile
 )
+
+# Pass --device to esphome for run/upload/logs — works for serial OR IP/hostname
+if ($Device -and $Command -in @('run', 'upload', 'logs')) {
+    $dockerArgs += @('--device', $Device)
+}
 
 Write-Host " docker $($dockerArgs -join ' ')" -ForegroundColor DarkGray
 Write-Host ''
