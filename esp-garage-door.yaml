@@ -24,6 +24,10 @@ wifi:
   ap:
     ssid: "GarageDoor-Fallback"
     password: !secret fallback_ap_password
+  on_connect:
+    - switch.turn_on: wifi_status_led
+  on_disconnect:
+    - switch.turn_off: wifi_status_led
 
 captive_portal:
 
@@ -31,11 +35,25 @@ captive_portal:
 # When GPIO33 goes HIGH, transistor saturates and shorts the
 # remote's door-button input pad to ground → simulated button press.
 switch:
+  # GPIO33 drives the 2N3904 base via 1 kΩ resistor.
+  # When HIGH, transistor saturates and shorts the remote's door-button
+  # input pad to ground → simulated button press.
   - platform: gpio
     pin: GPIO33
     id: door_trigger
     restore_mode: ALWAYS_OFF
     internal: true
+  # GPIO2 — onboard blue LED on most ESP32 dev boards (active-low).
+  # Wired to WiFi status: ON when connected, OFF when disconnected.
+  # If your LED is active-high, flip inverted: false.
+  - platform: gpio
+    pin:
+      number: GPIO2
+      inverted: true
+    id: wifi_status_led
+    name: "WiFi Status LED"
+    internal: true
+    restore_mode: ALWAYS_OFF
 
 # Tunable threshold — set via HA UI. Distance below this = door OPEN.
 # Mount HC-SR04 on top of the powerhead pointing down at the top door panel.
