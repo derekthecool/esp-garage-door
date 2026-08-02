@@ -100,6 +100,22 @@ the input pad to battery "−". Door should fire.
 
    First flash requires USB. After that, OTA updates work over WiFi.
 
+### Docker alternative (when the native toolchain breaks)
+
+If your native esphome / PlatformIO / xtensa toolchain has issues (the
+GCC 14.2.0 internal-compiler-error on the combined arduino+espidf framework
+is a known one), use the official docker image instead:
+
+```powershell
+./scripts/Invoke-EsphomeDocker.ps1                          # run (compile + flash)
+./scripts/Invoke-EsphomeDocker.ps1 -Command compile          # just compile
+./scripts/Invoke-EsphomeDocker.ps1 -Command logs             # stream logs
+./scripts/Invoke-EsphomeDocker.ps1 -Device /dev/ttyACM0      # override serial port
+```
+
+Requires docker installed and the user in the `docker` group (Linux) or
+Docker Desktop running (macOS/Windows).
+
 ## Home Assistant integration
 
 Once the ESP32 boots and joins WiFi:
