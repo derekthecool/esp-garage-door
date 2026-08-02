@@ -43,13 +43,13 @@ switch:
     id: door_trigger
     restore_mode: ALWAYS_OFF
     internal: true
-  # GPIO2 — onboard blue LED on most ESP32 dev boards (active-low).
-  # Wired to WiFi status: ON when connected, OFF when disconnected.
-  # If your LED is active-high, flip inverted: false.
+  # GPIO2 — onboard blue LED. Toggle inverted if polarity is wrong.
+  # Active-low (most boards): inverted: true
+  # Active-high: inverted: false
   - platform: gpio
     pin:
       number: GPIO2
-      inverted: true
+      inverted: false
     id: wifi_status_led
     name: "WiFi Status LED"
     internal: true
