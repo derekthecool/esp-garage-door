@@ -107,11 +107,17 @@ GCC 14.2.0 internal-compiler-error on the combined arduino+espidf framework
 is a known one), use the official docker image instead:
 
 ```powershell
-./scripts/Invoke-EsphomeDocker.ps1                          # run (compile + flash)
-./scripts/Invoke-EsphomeDocker.ps1 -Command compile          # just compile
-./scripts/Invoke-EsphomeDocker.ps1 -Command logs             # stream logs
-./scripts/Invoke-EsphomeDocker.ps1 -Device /dev/ttyACM0      # override serial port
+./scripts/Invoke-EsphomeDocker.ps1                                  # run (compile + flash, prompts for USB/OTA)
+./scripts/Invoke-EsphomeDocker.ps1 -Command compile                  # just compile, no flash
+./scripts/Invoke-EsphomeDocker.ps1 -Command logs                     # stream logs over OTA
+./scripts/Invoke-EsphomeDocker.ps1 -Device /dev/ttyACM0              # force a specific USB port
+./scripts/Invoke-EsphomeDocker.ps1 -Device 192.168.1.74              # OTA direct to IP (no USB, no mDNS)
 ```
+
+The `-Device <IP>` form is the recommended way to push updates once the
+device is on WiFi — no USB cable needed, no mDNS dependency (uses TCP on
+port 3232 directly). Find the current IP in HA under the ESPHome
+integration's device page, or via your router's DHCP table.
 
 Requires docker installed and the user in the `docker` group (Linux) or
 Docker Desktop running (macOS/Windows).
