@@ -55,26 +55,27 @@ switch:
     internal: true
     restore_mode: ALWAYS_OFF
 
-# Tunable threshold — set via HA UI. Distance below this = door OPEN.
-# Mount HC-SR04 on top of the powerhead pointing down at the top door panel.
-# Door OPEN: panel horizontal near ceiling → small distance.
-# Door CLOSED: panel vertical at front of opening → large distance.
+# Expected HC-SR04 distance reading when door is OPEN (top panel horizontal
+# near the ceiling/powerhead). Set in HA after measuring with door open.
+# Door CLOSED: panel out of range → sensor returns NaN → cover reports CLOSED.
+# Cover returns OPEN only if reading is within ±0.1 m of this value.
 number:
   - platform: template
-    name: "Door Distance Threshold"
-    id: door_distance_threshold
+    name: "Door Open Distance"
+    id: door_open_distance
     min_value: 0.1
     max_value: 3.0
-    step: 0.05
-    initial_value: 1.0
+    step: 0.01
+    initial_value: 0.54
     optimistic: true
     restore_value: true
     unit_of_measurement: "m"
 
 # Genie wall-button logic: one momentary press cycles the door
 # (open if closed, close if open, stop if moving). All three cover
-# actions pulse the same transistor for ~300 ms. Cover state is
-# derived from the HC-SR04 distance reading vs. the threshold above.
+# actions pulse the same transistor for ~300 ms. Cover state:
+#   - Distance ≈ door_open_distance (±0.1 m) → OPEN
+#   - Anything else (including NaN / out-of-range) → CLOSED
 cover:
   - platform: template
     name: "Garage Door"
@@ -82,13 +83,12 @@ cover:
     device_class: garage
     lambda: |-
       if (isnan(id(garage_distance).state)) {
-        return {};
-      }
-      if (id(garage_distance).state < id(door_distance_threshold).state) {
-        return COVER_OPEN;
-      } else {
         return COVER_CLOSED;
       }
+      if (fabs(id(garage_distance).state - id(door_open_distance).state) <= 0.1) {
+        return COVER_OPEN;
+      }
+      return COVER_CLOSED;
     open_action:
       - switch.turn_on: door_trigger
       - delay: 300ms
