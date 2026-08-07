@@ -1,0 +1,42 @@
+esphome:
+  name: esp-hall-test
+  friendly_name: Hall Test
+  comment: Bench test for A3144 hall sensor — no WiFi, no API, logs to USB serial only
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+  level: DEBUG
+
+binary_sensor:
+  # GPIO32 with internal pull-up, no filters. Explicit on_press/on_release
+  # actions fire logger.log lines so we can see if GPIO interrupts are
+  # working independently of the standard "Sending state" log line.
+  - platform: gpio
+    id: hall_test_pin
+    pin:
+      number: GPIO32
+      mode:
+        input: true
+        pullup: true
+    name: "Hall Test"
+    device_class: door
+    on_press:
+      then:
+        - logger.log: "EVENT: GPIO32 went HIGH"
+    on_release:
+      then:
+        - logger.log: "EVENT: GPIO32 went LOW"
+
+# Heartbeat — fires every 5s and logs the current pin state. If you see
+# these lines streaming, the firmware is alive and reading the pin. If you
+# don't see them, the device has hung after boot or logs aren't streaming.
+interval:
+  - interval: 5s
+    then:
+      - logger.log:
+          format: "tick: hall state=%s"
+          args: ['id(hall_test_pin).state ? "ON" : "OFF"']

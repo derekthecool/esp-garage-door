@@ -1,0 +1,55 @@
+esphome:
+  name: esp-light-test
+  friendly_name: Light Test
+  comment: Bench test for photodiode/light sensor — no WiFi, no API, logs to USB serial only
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+  level: DEBUG
+
+binary_sensor:
+  # Light sensor (photodiode / phototransistor / LDR) on GPIO32.
+  # Internal pull-up enabled — pin reads HIGH when sensor is dark,
+  # LOW when sensor is illuminated (sensor conducts to GND).
+  #
+  # Debounce filters:
+  #   delayed_on 500ms  — light must be stably detected for half a second
+  #                       before the state flips to LIT. Suppresses flicker
+  #                       at the moment of transition.
+  #   delayed_off 2000ms — sensor must be stably dark for 2 seconds before
+  #                       the state flips back to DARK. Bulbs flicker as they
+  #                       cool; we don't want false OFF events.
+  #
+  # Tune for production: bump delayed_off to 5000ms once you confirm the
+  # bench behavior. The garage opener's bulb is on for 5–10 minutes, so
+  # multi-second latency on state changes is irrelevant.
+  - platform: gpio
+    id: light_sensor_pin
+    pin:
+      number: GPIO32
+      mode:
+        input: true
+        pullup: true
+    name: "Light Sensor"
+    filters:
+      - delayed_on: 500ms
+      - delayed_off: 2000ms
+    # With pull-up: HIGH (state ON) = dark, LOW (state OFF) = lit.
+    on_press:
+      then:
+        - logger.log: "EVENT: pin HIGH (sensor DARK) — debounced"
+    on_release:
+      then:
+        - logger.log: "EVENT: pin LOW (sensor LIT) — debounced"
+
+# Heartbeat — fires every 5s, prints current *debounced* pin state.
+interval:
+  - interval: 5s
+    then:
+      - logger.log:
+          format: "tick: light sensor=%s"
+          args: ['id(light_sensor_pin).state ? "HIGH-dark" : "LOW-lit"']
