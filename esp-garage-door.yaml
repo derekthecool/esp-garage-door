@@ -11,8 +11,8 @@ esp32:
 logger:
   level: DEBUG
   logs:
-    # Mute the ultrasonic distance-reading spam (1 Hz) so the light-sensor
-    # / cover / toggle events are visible in the stream.
+    # Mute the ultrasonic distance-reading spam from BOTH HC-SR04s (2 Hz total)
+    # so the cover / toggle events are visible in the stream.
     sensor.ultrasonic: WARN
 
 api:
@@ -36,48 +36,26 @@ wifi:
 
 captive_portal:
 
-# Sync time from HA so we can fire the midnight state-reset trigger.
-time:
-  - platform: homeassistant
-    on_time:
-      # Reset door state to CLOSED at midnight — resync escape hatch for
-      # cases the bulb-on/trigger logic missed (manual wall-button during
-      # bulb-on window, sensor glitches, etc.).
-      - hours: 0
-        minutes: 0
-        seconds: 0
-        then:
-          - lambda: |-
-              id(door_open) = false;
-              id(last_toggle_ms) = 0;
-              ESP_LOGI("main", "Midnight reset — door state forced to CLOSED");
-
-# Door state tracking via the opener's lamp. The Genie (like most openers)
-# turns its bulb on for ~5–10 min after each operation — open OR close.
-# State toggles on either of:
-#   - door_trigger fire (HA-triggered operations; immediate feedback)
-#   - bulb dark→lit transition (physical remote / wall button)
-# A 10 s debounce window prevents double-toggle when both fire for the
-# same operation (HA pulse → door moves → bulb turns on a few sec later).
-# State is restored across reboots so a power blip doesn't desync it.
-# Midnight reset (below) provides a resync escape hatch.
-globals:
-  - id: door_open
-    type: bool
-    initial_value: 'false'   # assume CLOSED on first boot
-    restore_value: true
-  - id: last_toggle_ms
-    type: uint32_t
-    initial_value: '0'
+# ──────────────────────────────────────────────────────────────────────────
+# Door state is now read DIRECTLY from a second HC-SR04 ultrasonic sensor
+# aimed at the door panel. When the door is OPEN the panel sits in the beam
+# at ~1 m; when CLOSED the beam clears the panel and returns no echo (NaN).
+# This replaces the previous LDR/bulb-derived state tracking, which drifted
+# (single bulb-on signal can't tell open from close, and a physical-remote
+# press during the bulb-on window was invisible). The ultrasonic reads actual
+# position, so the cover reports truth instead of an assumption.
+#
+# The LDR/light sensor is retained as a plain "bulb lit" binary for HA — but
+# with all door-state derivation and debouncing removed (see binary_sensor
+# garage_light_sensor below).
+# ──────────────────────────────────────────────────────────────────────────
 
 binary_sensor:
-  # Photodiode on GPIO35 read via ADC (ADC1_CH7). The ADC reads the voltage
-  # at the pin: pull-up to 3.3 V through 10 kΩ + photodiode to GND forms a
-  # divider. Dark → voltage near 3.3 V. Lit → voltage drops.
-  # We turn that into a "lit" binary via the threshold number below.
-  # ADC was chosen over digital read because some photodiodes/transistors
-  # have enough dark current to pull a digital pin LOW even with no light;
-  # analog lets us see the actual voltage and pick a sane threshold.
+  # Light sensor stripped down to a basic "opener bulb lit" binary for HA.
+  # ADC on GPIO32 (ADC1_CH4), 47 kΩ external pull-up to 3.3 V (internal
+  # pull-ups are silently bypassed for ADC pins — see sensor block below).
+  # ON = lit (ADC voltage below the threshold), OFF = dark. No state
+  # derivation, no toggling, no debouncing — just the raw lit/dark signal.
   - platform: template
     id: garage_light_sensor
     name: "Garage Door Light Sensor"
@@ -87,34 +65,8 @@ binary_sensor:
         return false;
       }
       return id(garage_light_adc).state < id(light_threshold_volts).state;
-    filters:
-      - delayed_on: 1000ms
-      - delayed_off: 5000ms
-    on_press:    # state went OFF (dark) → ON (lit) = bulb just turned on
-      then:
-        - lambda: |-
-            uint32_t now = millis();
-            if (now - id(last_toggle_ms) > 10000) {
-              id(door_open) = !id(door_open);
-              id(last_toggle_ms) = now;
-              ESP_LOGI("main", "Bulb-on (physical trigger) — toggled state");
-            } else {
-              ESP_LOGI("main", "Bulb-on — debounced (recent door_trigger fire)");
-            }
-    on_release:  # state went ON (lit) → OFF (dark) = bulb timed out
-      then:
-        - logger.log: "Garage bulb: OFF (dark) — not toggling"
 
-  # Door state derived from light-sensor transitions. Each garage door
-  # operation (open or close) flips this. Use this entity for state in HA.
-  - platform: template
-    id: garage_door_state_from_light
-    name: "Garage Door State From Light"
-    device_class: garage_door
-    lambda: |-
-      return id(door_open);
-
-  # Car-presence derived from the repointed ultrasonic sensor.
+  # Car-presence derived from the parking-spot ultrasonic sensor.
   - platform: template
     name: "Car In Garage"
     id: car_in_garage
@@ -129,19 +81,17 @@ binary_sensor:
 # When GPIO33 goes HIGH, transistor saturates and shorts the
 # remote's door-button input pad to ground → simulated button press.
 switch:
-  # GPIO33 drives the 2N3904 base via 1 kΩ resistor.
-  # When HIGH, transistor saturates and shorts the remote's door-button
-  # input pad to ground → simulated button press.
-  # No state logic here — the cover's open/close actions below set door_open
-  # explicitly. door_trigger is just the electrical pulse path.
+  # GPIO33 drives the 2N3904 base via 1 kΩ resistor. When HIGH, transistor
+  # saturates and shorts the remote's door-button pad to ground → button press.
+  # No state logic here — door_trigger is just the electrical pulse path. The
+  # Genie remote is a single toggle, so open/close/stop all pulse the same pin;
+  # cover state comes from the door ultrasonic sensor, not from this switch.
   - platform: gpio
     pin: GPIO33
     id: door_trigger
     restore_mode: ALWAYS_OFF
     internal: true
-  # GPIO2 — onboard blue LED. Toggle inverted if polarity is wrong.
-  # Active-low (most boards): inverted: true
-  # Active-high: inverted: false
+  # GPIO2 — onboard blue LED. Active-high on this board (flip inverted if not).
   - platform: gpio
     pin:
       number: GPIO2
@@ -153,8 +103,23 @@ switch:
 
 # Tunable thresholds.
 number:
+  # Distance cutoff for the DOOR ultrasonic. The door is considered OPEN when
+  # the reading is a valid number at or below this (panel in beam at ~1 m);
+  # NaN (no echo, door closed) = CLOSED. Default 1.5 m gives margin above the
+  # ~1 m open reading — measure your actual open distance and trim this so it
+  # reliably covers the open reading without catching the closed (NaN) case.
+  - platform: template
+    name: "Door Open Distance"
+    id: door_open_distance
+    min_value: 0.2
+    max_value: 3.0
+    step: 0.05
+    initial_value: 1.5
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "m"
   # Distance threshold below which a car is considered parked under the
-  # repointed ultrasonic sensor. Tune in HA after measuring with car parked.
+  # parking-spot ultrasonic sensor. Tune in HA after measuring with car parked.
   - platform: template
     name: "Car Present Distance"
     id: car_present_distance
@@ -166,8 +131,8 @@ number:
     restore_value: true
     unit_of_measurement: "m"
   # Voltage threshold for the light sensor. ADC reading BELOW this = "lit".
-  # Tune after install: cover sensor (dark) → note ADC reading;
-  # shine light on it (lit) → note ADC reading; set threshold between them.
+  # Tune after install: dark → note ADC reading; shine light → note reading;
+  # set threshold between them.
   - platform: template
     name: "Light Threshold Volts"
     id: light_threshold_volts
@@ -179,25 +144,20 @@ number:
     restore_value: true
     unit_of_measurement: "V"
 
-# Genie wall-button logic: one momentary press cycles the door
-# (open if closed, close if open, stop if moving). All three cover
-# actions pulse the same transistor for ~300 ms.
-#
-# State handling:
-#   - open_action / close_action explicitly SET door_open (not toggle)
-#     so HA-triggered operations update state immediately, even when
-#     the bulb is already on and no new bulb-on transition fires.
-#   - Physical-remote / wall-button presses are detected via the bulb-on
-#     event in the binary_sensor above, which TOGGLES door_open (since
-#     we don't know which way the door moved from the bulb signal alone).
-#   - stop_action: just pulses, no state change (door is mid-travel).
+# Genie wall-button logic: one momentary press cycles the door (toggle).
+# All three cover actions pulse the same transistor for ~300 ms. State is NOT
+# assumed on command — the cover lambda reads the door ultrasonic, so HA
+# reports actual position once the panel settles at the open/closed spot.
 cover:
   - platform: template
     name: "Garage Door"
     id: garage_door
     device_class: garage
     lambda: |-
-      if (id(door_open)) {
+      // OPEN when the door ultrasonic sees the panel in its beam (valid
+      // reading within the open-distance cutoff). NaN or out-of-range = CLOSED.
+      if (!isnan(id(door_distance).state) &&
+          id(door_distance).state <= id(door_open_distance).state) {
         return COVER_OPEN;
       }
       return COVER_CLOSED;
@@ -205,18 +165,10 @@ cover:
       - switch.turn_on: door_trigger
       - delay: 300ms
       - switch.turn_off: door_trigger
-      - lambda: |-
-          id(door_open) = true;
-          id(last_toggle_ms) = millis();
-          ESP_LOGI("main", "HA open_action — state forced OPEN");
     close_action:
       - switch.turn_on: door_trigger
       - delay: 300ms
       - switch.turn_off: door_trigger
-      - lambda: |-
-          id(door_open) = false;
-          id(last_toggle_ms) = millis();
-          ESP_LOGI("main", "HA close_action — state forced CLOSED");
     stop_action:
       - switch.turn_on: door_trigger
       - delay: 300ms
@@ -255,9 +207,9 @@ sensor:
       - median:
           window_size: 5
           send_every: 2
-  # HC-SR04 ultrasonic distance sensor pointing down at the parking spot.
-  # NOTE: ECHO outputs 5V — must use a 2kΩ/1kΩ voltage divider to GPIO22,
-  # or use an HC-SR04P (3V variant) with no divider.
+  # HC-SR04 #1 — points DOWN at the parking spot → car presence.
+  # ECHO outputs 5 V: use a 2 kΩ/1 kΩ voltage divider to GPIO22 (or an
+  # HC-SR04P 3 V variant with no divider).
   - platform: ultrasonic
     trigger_pin: GPIO23
     echo_pin: GPIO22
@@ -271,6 +223,26 @@ sensor:
       - median:
           window_size: 5
           send_every: 5
+  # HC-SR04 #2 — aimed at the DOOR panel → door open/closed state.
+  # Same wiring as #1 (2 kΩ/1 kΩ divider on ECHO to GPIO26). OPEN ≈ a valid
+  # reading at ~1 m (panel in beam); CLOSED = no echo (NaN). The cover lambda
+  # and door_open_distance number above turn this into cover state.
+  # NOTE: relocated from GPIO21/19 → GPIO25/26. The door position timed out on
+  # 21/19 with two known-good modules (both work at the parking spot on 22/23),
+  # so the fault is in the 21/19 path or that harness; the new pins isolate it.
+  - platform: ultrasonic
+    trigger_pin: GPIO25
+    echo_pin: GPIO26
+    name: "Door Distance"
+    id: door_distance
+    update_interval: 1s
+    timeout: 2m
+    accuracy_decimals: 2
+    unit_of_measurement: "m"
+    filters:
+      - median:
+          window_size: 5
+          send_every: 3
 
 text_sensor:
   - platform: version
@@ -279,14 +251,3 @@ text_sensor:
 button:
   - platform: restart
     name: "Restart"
-  # Manual resync — forces door_open to CLOSED. Use any time state has
-  # drifted (e.g., physical-remote press while bulb was already on, or
-  # the Genie's open/close cycle got out of sync with HA's view).
-  - platform: template
-    name: "Force Door State Closed"
-    on_press:
-      then:
-        - lambda: |-
-            id(door_open) = false;
-            id(last_toggle_ms) = millis();
-            ESP_LOGI("main", "Manual reset — door state forced to CLOSED");
